@@ -68,7 +68,7 @@ if DATABASE_URL is not None:
         environ['UPGRADE_PACKAGES'] = config_dict.get('UPDATE_PACKAGES', 'False')
     conn.close()
 
-UPGRADE_PACKAGES = environ.get('UPGRADE_PACKAGES', 'False') 
+UPGRADE_PACKAGES = environ.get('UPGRADE_PACKAGES', 'False')
 if UPGRADE_PACKAGES.lower() == 'true':
     packages = [dist.project_name for dist in working_set]
     scall("uv pip install --system " + ' '.join(packages), shell=True)
@@ -111,23 +111,42 @@ if UPSTREAM_REPO is not None:
         UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
     if update_succeeded:
         log_info('Successfully updated with latest commits !!')
-        # Koyeb Free has limited memory. Upstream currently sets Pyrogram to
-        # 1000 workers, which can create excessive thread/memory overhead.
-        # Patch the downloaded source after every upstream reset so the change
-        # remains effective even though the upstream repository is refreshed.
+        # Koyeb Free has limited memory. Patch the downloaded upstream source
+        # after each reset, because the upstream repository is refreshed at startup.
         bot_init = ospath.join('bot', '__init__.py')
         try:
             with open(bot_init, 'r', encoding='utf-8') as f:
                 source = f.read()
+
+            changes = []
             if 'workers=1000' in source:
                 source = source.replace('workers=1000', 'workers=10', 1)
+                changes.append('Pyrogram workers=10')
+
+            # This is only a startup test torrent, not the aria2 service itself.
+            # Avoid starting an ISO torrent on memory-constrained instances.
+            test_torrent_line = 'Thread(target=aria2c_init).start()'
+            if test_torrent_line in source:
+                source = source.replace(
+                    test_torrent_line,
+                    "log_info('Skipped startup test torrent to reduce memory usage')",
+                    1
+                )
+                changes.append('startup test torrent disabled')
+
+            # Reduce the HTTP connection pool size; 500 is excessive for a small instance.
+            if '"pool_maxsize": 500' in source:
+                source = source.replace('"pool_maxsize": 500', '"pool_maxsize": 25', 1)
+                changes.append('qBittorrent HTTP pool_maxsize=25')
+
+            if changes:
                 with open(bot_init, 'w', encoding='utf-8') as f:
                     f.write(source)
-                log_info('Applied low-memory Pyrogram worker setting: workers=10')
+                log_info('Applied low-memory settings: ' + '; '.join(changes))
             else:
-                log_info('Pyrogram worker setting unchanged (target not found)')
+                log_info('Low-memory settings already applied or source patterns not found')
         except Exception as e:
-            log_error(f'Could not apply Pyrogram worker setting: {e}')
+            log_error(f'Could not apply low-memory settings: {e}')
     else:
         log_error('Something went Wrong ! Retry or Ask Support !')
     log_info(f'UPSTREAM_REPO: {UPSTREAM_REPO} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}')
