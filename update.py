@@ -83,20 +83,33 @@ if len(UPSTREAM_BRANCH) == 0:
 
 if UPSTREAM_REPO is not None:
     if ospath.exists('.git'):
-        srun(["rm", "-rf", ".git"])
+        srun(["rm", "-rf", ".git"], check=True)
 
-    update = srun([f"git init -q \
-                     && git config --global user.email kpstorrent@gmail.com \
-                     && git config --global user.name kpsbots \
-                     && git add . \
-                     && git commit -sm update -q \
-                     && git remote add origin {UPSTREAM_REPO} \
-                     && git fetch origin -q \
-                     && git reset --hard origin/{UPSTREAM_BRANCH} -q"], shell=True)
+    # Run Git commands separately instead of interpolating environment values
+    # into a shell command. This preserves updater behavior and avoids shell injection.
+    commands = [
+        ["git", "init", "-q"],
+        ["git", "config", "--global", "user.email", "kpstorrent@gmail.com"],
+        ["git", "config", "--global", "user.name", "kpsbots"],
+        ["git", "add", "."],
+        ["git", "commit", "-sm", "update", "-q"],
+        ["git", "remote", "add", "origin", UPSTREAM_REPO],
+        ["git", "fetch", "origin", "-q"],
+        ["git", "reset", "--hard", f"origin/{UPSTREAM_BRANCH}", "-q"],
+    ]
 
-    repo = UPSTREAM_REPO.split('/')
-    UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
-    if update.returncode == 0:
+    try:
+        for command in commands:
+            srun(command, check=True)
+        update_succeeded = True
+    except Exception as e:
+        log_error(f"Updater failed: {e}")
+        update_succeeded = False
+
+    repo = UPSTREAM_REPO.rstrip('/').split('/')
+    if len(repo) >= 2:
+        UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
+    if update_succeeded:
         log_info('Successfully updated with latest commits !!')
     else:
         log_error('Something went Wrong ! Retry or Ask Support !')
