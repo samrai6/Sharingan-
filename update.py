@@ -86,7 +86,7 @@ if UPSTREAM_REPO is not None:
         srun(["rm", "-rf", ".git"], check=True)
 
     # Run Git commands separately instead of interpolating environment values
-    # into a shell command. This preserves updater behavior and avoids shell injection.
+    # into shell commands.
     commands = [
         ["git", "init", "-q"],
         ["git", "config", "--global", "user.email", "kpstorrent@gmail.com"],
@@ -111,8 +111,6 @@ if UPSTREAM_REPO is not None:
         UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
     if update_succeeded:
         log_info('Successfully updated with latest commits !!')
-        # Koyeb Free has limited memory. Patch the downloaded upstream source
-        # after each reset, because the upstream repository is refreshed at startup.
         bot_init = ospath.join('bot', '__init__.py')
         try:
             with open(bot_init, 'r', encoding='utf-8') as f:
@@ -123,8 +121,6 @@ if UPSTREAM_REPO is not None:
                 source = source.replace('workers=1000', 'workers=10', 1)
                 changes.append('Pyrogram workers=10')
 
-            # This is only a startup test torrent, not the aria2 service itself.
-            # Avoid starting an ISO torrent on memory-constrained instances.
             test_torrent_line = 'Thread(target=aria2c_init).start()'
             if test_torrent_line in source:
                 source = source.replace(
@@ -134,19 +130,46 @@ if UPSTREAM_REPO is not None:
                 )
                 changes.append('startup test torrent disabled')
 
-            # Reduce the HTTP connection pool size; 500 is excessive for a small instance.
             if '"pool_maxsize": 500' in source:
                 source = source.replace('"pool_maxsize": 500', '"pool_maxsize": 25', 1)
                 changes.append('qBittorrent HTTP pool_maxsize=25')
 
+            # Respect Telegram's server-provided FloodWait instead of crashing
+            # and triggering repeated container restarts during bot authorization.
+            import_line = 'from pyrogram import Client as tgClient, enums, utils as pyroutils'
+            if import_line in source and 'from pyrogram.errors import FloodWait' not in source:
+                source = source.replace(import_line, import_line + '\nfrom pyrogram.errors import FloodWait', 1)
+
+            old_login = """bot = wztgClient('bot', TELEGRAM_API, TELEGRAM_HASH, bot_token=BOT_TOKEN, workers=10,
+               parse_mode=enums.ParseMode.HTML).start()"""
+            new_login = """def start_bot_with_floodwait(client):
+    while True:
+        try:
+            return client.start()
+        except FloodWait as e:
+            wait_seconds = int(getattr(e, 'value', 444)) + 5
+            log_warning(f'Telegram bot login FloodWait; waiting {wait_seconds} seconds before retrying')
+            sleep(wait_seconds)
+
+
+bot = start_bot_with_floodwait(
+    wztgClient('bot', TELEGRAM_API, TELEGRAM_HASH, bot_token=BOT_TOKEN, workers=10,
+               parse_mode=enums.ParseMode.HTML)
+)"""
+            if old_login in source:
+                source = source.replace(old_login, new_login, 1)
+                changes.append('Telegram login FloodWait retry')
+            elif 'def start_bot_with_floodwait(client):' not in source:
+                log_warning('Could not find exact bot login line for FloodWait retry patch')
+
             if changes:
                 with open(bot_init, 'w', encoding='utf-8') as f:
                     f.write(source)
-                log_info('Applied low-memory settings: ' + '; '.join(changes))
+                log_info('Applied startup fixes: ' + '; '.join(changes))
             else:
-                log_info('Low-memory settings already applied or source patterns not found')
+                log_info('Startup fixes already applied or source patterns not found')
         except Exception as e:
-            log_error(f'Could not apply low-memory settings: {e}')
+            log_error(f'Could not apply startup fixes: {e}')
     else:
         log_error('Something went Wrong ! Retry or Ask Support !')
     log_info(f'UPSTREAM_REPO: {UPSTREAM_REPO} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}')
