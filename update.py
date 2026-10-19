@@ -111,6 +111,23 @@ if UPSTREAM_REPO is not None:
         UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
     if update_succeeded:
         log_info('Successfully updated with latest commits !!')
+        # Koyeb Free has limited memory. Upstream currently sets Pyrogram to
+        # 1000 workers, which can create excessive thread/memory overhead.
+        # Patch the downloaded source after every upstream reset so the change
+        # remains effective even though the upstream repository is refreshed.
+        bot_init = ospath.join('bot', '__init__.py')
+        try:
+            with open(bot_init, 'r', encoding='utf-8') as f:
+                source = f.read()
+            if 'workers=1000' in source:
+                source = source.replace('workers=1000', 'workers=10', 1)
+                with open(bot_init, 'w', encoding='utf-8') as f:
+                    f.write(source)
+                log_info('Applied low-memory Pyrogram worker setting: workers=10')
+            else:
+                log_info('Pyrogram worker setting unchanged (target not found)')
+        except Exception as e:
+            log_error(f'Could not apply Pyrogram worker setting: {e}')
     else:
         log_error('Something went Wrong ! Retry or Ask Support !')
     log_info(f'UPSTREAM_REPO: {UPSTREAM_REPO} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}')
